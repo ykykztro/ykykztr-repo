@@ -1,6 +1,7 @@
-﻿; ============================================================
+; ============================================================
 ;  WindowQuickJump.ahk — 窗口/标签页编号直达工具
 ;  AHK v2       Alt+1~9 绑定/切换    Ctrl+Alt+1~9 强制覆盖
+;  支持：浏览器标签页 / VS Code 编辑器（按标题定位）
 ; ============================================================
 
 #Requires AutoHotkey v2.0
@@ -30,16 +31,42 @@ ShowTip(msg, ms := 1500) {
     SetTimer () => ToolTip(), -ms
 }
 
-; === 判断是否为浏览器 ===
-IsBrowser(hwnd) {
+; === 判断应用类型 ===
+;  注意：VS Code 与 Chrome 同属 Chrome_WidgetWin_1 窗口类，
+;  因此必须先按进程名区分 Code.exe，否则会被误判为浏览器而用错按键。
+GetApp(hwnd) {
     global BrowserClasses
+
+    try proc := WinGetProcessName("ahk_id " hwnd)
+    if (proc = "Code.exe")
+        return "VSCode"
 
     cls := WinGetClass("ahk_id " hwnd)
     for c in BrowserClasses {
         if cls = c
-            return true
+            return "Browser"
     }
-    return false
+    return "Other"
+}
+
+; === 从 VS Code 窗口标题中提取当前编辑器文件名 ===
+;  标题格式通常为 "文件名.ext - 项目名 - Visual Studio Code"，
+;  取第一段并去掉未保存标记 ● / *。
+VSCodeFileName(title) {
+    t := title
+    ; 去掉后缀 " - Visual Studio Code"
+    idx := InStr(t, " - Visual Studio Code")
+    if idx
+        t := SubStr(t, 1, idx - 1)
+    ; 第一段（按 " - " 或 " — " 分隔）即为文件名
+    if InStr(t, " - ")
+        t := SubStr(t, 1, InStr(t, " - ") - 1)
+    else if InStr(t, " — ")
+        t := SubStr(t, 1, InStr(t, " — ") - 1)
+    ; 去掉未保存标记 ● / *
+    while (SubStr(t, 1, 1) = "●" || SubStr(t, 1, 1) = "*")
+        t := SubStr(t, 2)
+    return Trim(t)
 }
 
 ; === 绑定当前窗口 ===
@@ -55,6 +82,34 @@ BindWindow(n, *) {
     title := WinGetTitle("ahk_id " hwnd)
     Slot[n] := { hwnd: hwnd, title: title }
     ShowTip("Slot " n " 已绑定: " title, 2000)
+}
+
+; === 标签页轮询（浏览器，按完整标题包含匹配）===
+CycleBrowserTabs(hwnd, targetTitle, n) {
+    cur := WinGetTitle("ahk_id " hwnd)
+    if InStr(cur, targetTitle) {
+        ShowTip("Slot " n ": " targetTitle, 1200)
+        return
+    }
+
+    start := cur
+    ; 最多尝试 30 次，但转完一圈回到起点即停止，避免无意义空转
+    Loop 30 {
+        SendInput "^{Tab}"
+        Sleep 60
+        cur := WinGetTitle("ahk_id " hwnd)
+        if InStr(cur, targetTitle) {
+            ShowTip("Slot " n " 已定位: " targetTitle, 1500)
+            return
+        }
+        ; 已绕回起点 → 全部标签页都不匹配，提前结束
+        if (cur = start) {
+            ShowTip("Slot " n " 未找到: " targetTitle, 2500)
+            return
+        }
+    }
+
+    ShowTip("Slot " n " 未找到: " targetTitle, 2500)
 }
 
 ; === 跳转到绑定窗口 ===
@@ -75,31 +130,39 @@ JumpToWindow(n) {
 
     WinActivate("ahk_id " s.hwnd)
     Sleep 100
-    if IsBrowser(s.hwnd)
+
+    app := GetApp(s.hwnd)
+    if (app = "Browser") {
         CycleBrowserTabs(s.hwnd, s.title, n)
-    else
-        ShowTip("Slot " n ": " s.title, 1200)
-}
-
-; === 浏览器标签页轮询 ===
-CycleBrowserTabs(hwnd, targetTitle, n) {
-    cur := WinGetTitle("ahk_id " hwnd)
-    if InStr(cur, targetTitle) {
-        ShowTip("Slot " n ": " targetTitle, 1200)
-        return
-    }
-
-    Loop 30 {
-        SendInput "^{Tab}"
-        Sleep 55
-        cur := WinGetTitle("ahk_id " hwnd)
-        if InStr(cur, targetTitle) {
-            ShowTip("Slot " n " 已定位: " targetTitle, 1500)
+    } else if (app = "VSCode") {
+        name := VSCodeFileName(s.title)
+        if !name {
+            ShowTip("Slot " n " 无法解析文件名", 2000)
             return
         }
+        cur := WinGetTitle("ahk_id " s.hwnd)
+        if (VSCodeFileName(cur) = name) {
+            ShowTip("Slot " n ": " name, 1200)
+            return
+        }
+        start := cur
+        ; VS Code 用 Ctrl+PageDown 顺序切换编辑器，标题会立即更新
+        Loop 30 {
+            SendInput "^{PgDn}"
+            Sleep 60
+            cur := WinGetTitle("ahk_id " s.hwnd)
+            if (VSCodeFileName(cur) = name) {
+                ShowTip("Slot " n " 已定位: " name, 1500)
+                return
+            }
+            ; 绕回起点 → 当前编辑器组里没有该文件，提前结束
+            if (cur = start)
+                break
+        }
+        ShowTip("Slot " n " 未找到: " name, 2500)
+    } else {
+        ShowTip("Slot " n ": " s.title, 1200)
     }
-
-    ShowTip("Slot " n " 未找到: " targetTitle, 3000)
 }
 
 ; === 注册快捷键 1~9 ===
