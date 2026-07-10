@@ -128,32 +128,7 @@ FocusPage(hwnd) {
     }
 }
 
-; === 用浏览器"标签搜索"面板直接定位（Edge/Chrome: Ctrl+Shift+A）===
-;  直接按标签页名字搜索并跳转，不受标签数量/顺序/新建标签/睡眠标签影响。
-FindTabBySearch(hwnd, name, n) {
-    if (name = "")
-        return false
-    WinActivate("ahk_id " hwnd)
-    Sleep 150
-    SendInput "^+a"          ; 打开标签搜索面板
-    Sleep 650               ; 等面板出现并聚焦搜索框
-    SendInput "^a{Delete}"  ; 清空可能残留的搜索词
-    Sleep 120
-    SendInput name          ; 输入标签页名字
-    Sleep 700               ; 等实时过滤完成
-    SendInput "{Enter}"     ; 跳转到第一个匹配结果
-    Sleep 450
-    ; 精确匹配到目标页才认为成功
-    if (BrowserPageTitle(WinGetTitle("ahk_id " hwnd)) = name) {
-        ShowTip("Slot " n " 已定位", 1500)
-        return true
-    }
-    SendInput "{Esc}"        ; 未命中则关闭面板
-    Sleep 150
-    return false
-}
-
-; === 顺序遍历兜底（搜索面板不可用/未命中时）===
+; === 顺序遍历查找（浏览器标签页定位的主要方式）===
 ;  key       : 切换键，如 "^{PgDn}"(正向) / "^{PgUp}"(反向)
 ;  matchesFn : 传入当前标题，返回是否到达目标
 ;  keyFn     : 提取"可比核心"用于回环判定
@@ -247,14 +222,14 @@ JumpToWindow(n) {
         } else if (BrowserPageTitle(WinGetTitle("ahk_id " s.hwnd)) = name) {
             ShowTip("Slot " n " 已定位", 1200)
         } else {
-            ; 优先用标签搜索面板直接搜这个名字；失败再顺序遍历兜底
-            found := FindTabBySearch(s.hwnd, name, n)
-            if !found {
-                if !CycleTabs(s.hwnd, "^{PgDn}", mF, BrowserPageTitle, n, "Slot " n)
-                    found := CycleTabs(s.hwnd, "^{PgUp}", mF, BrowserPageTitle, n, "Slot " n)
-                if !found
-                    ShowTip("Slot " n " 未找到: " name, 2500)
-            }
+            ; 不依赖标签搜索面板：用已清洗的名字直接顺序循环遍历标签页
+            ; 正向 Ctrl+PageDown 遍历全部标签，回到起点即一圈；
+            ; 若浏览器不回环且目标在左侧，再反向 Ctrl+PageUp 兜底。
+            found := CycleTabs(s.hwnd, "^{PgDn}", mF, BrowserPageTitle, n, "Slot " n)
+            if !found
+                found := CycleTabs(s.hwnd, "^{PgUp}", mF, BrowserPageTitle, n, "Slot " n)
+            if !found
+                ShowTip("Slot " n " 未找到: " name, 2500)
         }
         FocusPage(s.hwnd)        ; 焦点送回页面（空格可控制视频）
     } else if (app = "VSCode") {
