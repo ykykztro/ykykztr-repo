@@ -25,11 +25,21 @@ Loop 9
 ; === 浏览器类名 ===
 BrowserClasses := ["Chrome_WidgetWin_1", "Chrome_WidgetWin_0"]
 
-; === 辅助函数：右下角轻提示（不挡视线）===
-;   负坐标 = 距屏幕右边/底边的偏移，自动贴合右下角，不受文字宽度影响。
+; === 右下角轻提示（置顶 GUI，不抢焦点，小窗/全屏都可见）===
+;   用屏幕坐标定位到右下角，+AlwaysOnTop 盖在最大化浏览器之上；
+;   Show 带 NoActivate，且窗口本身不接收输入，绝不会偷走键盘焦点
+;   （因此切回正在播放视频的标签页后，空格仍可直接控制视频）。
 ShowTip(msg, ms := 1500) {
-    ToolTip msg, -16, -52
-    SetTimer () => ToolTip(), -ms
+    static g := "", t := ""
+    if (!IsObject(g)) {
+        g := Gui("+AlwaysOnTop -Caption +ToolWindow", "")
+        g.BackColor := "1F1F1F"
+        g.SetFont("s10", "Segoe UI")
+        t := g.AddText("cFFFFFF w320 Center", "")
+    }
+    t.Value := msg
+    g.Show("x" (A_ScreenWidth - 340) " y" (A_ScreenHeight - 80) " NoActivate")
+    SetTimer(() => g.Hide(), -ms)
 }
 
 ; === 判断应用类型 ===
@@ -70,6 +80,93 @@ VSCodeFileName(title) {
     return Trim(t)
 }
 
+; === 去掉浏览器标题后缀，只留"页面标题核心" ===
+;  Chrome/Edge 标题形如 "页面名 - Google Chrome" / "页面名 - Microsoft Edge"。
+;  去掉浏览器名后缀后做匹配，可规避 YouTube 等动态前缀(▶/⏸)的干扰。
+BrowserPageTitle(title) {
+    t := title
+    suffixes := [" - Google Chrome", " - Microsoft Edge", " - Microsoft Edge (Chromium)"]
+    for s in suffixes {
+        idx := InStr(t, s)
+        if idx
+            t := SubStr(t, 1, idx - 1)
+    }
+    return Trim(t)
+}
+
+; === 把键盘焦点送回网页渲染控件（解决"停在设置和其他"）===
+;  切回浏览器标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏，
+;  导致空格无法控制网页视频。把焦点交给页面的渲染控件即可恢复。
+FocusPage(hwnd) {
+    try {
+        ControlGet(&h, "Hwnd",, "Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
+        ControlFocus(, "ahk_id " h)
+    } catch {
+        ; 控件不存在（极少见）→ 不做处理，焦点大概率已在页面
+    }
+}
+
+; === 通用标签页遍历 ===
+;  key        : 用于切换的按键，如 "^{PgDn}"（正向）/ "^{PgUp}"（反向）
+;  matchesFn  : 传入当前标题，返回是否已定位到目标
+;  keyFn      : 提取"可比核心"（用于起点/卡住判定），如 BrowserPageTitle
+;  返回 {found:bool, wrapped:bool}
+;  关键点：
+;   - Sleep 130：留出标签切换后标题刷新的时间（之前 60ms 太短会误判卡住）
+;   - 连续两步标题无变化(same>=2)才判定到底：避免单步偶发不刷新导致误放弃
+;   - 回到起点(start)判定：处理会回环的浏览器的一整圈遍历
+CycleTabs(hwnd, key, matchesFn, keyFn, n, label) {
+    cur := WinGetTitle("ahk_id " hwnd)
+    if matchesFn(cur) {
+        ShowTip(label " 已定位", 1200)
+        return { found: true, wrapped: false }
+    }
+
+    start := keyFn(cur)
+    prev := start
+    same := 0
+    wrapped := false
+
+    Loop 30 {
+        SendInput key
+        Sleep 130
+        cur := WinGetTitle("ahk_id " hwnd)
+        if matchesFn(cur) {
+            ShowTip(label " 已定位", 1500)
+            return { found: true, wrapped: wrapped }
+        }
+        ck := keyFn(cur)
+        ; 已绕回起点 → 整圈遍历完，全部标签都不匹配
+        if (ck = start) {
+            wrapped := true
+            break
+        }
+        ; 连续两步标题无变化 → 已到末尾且不回环，避免空转到上限
+        if (ck = prev)
+            same++
+        else
+            same := 0
+        if (same >= 2)
+            break
+        prev := ck
+    }
+
+    return { found: false, wrapped: wrapped }
+}
+
+; === 把浏览器/编辑器切回起始标签，避免"找不到"时把用户留在别的标签 ===
+RestoreToStart(hwnd, key, startCore, keyFn) {
+    cur := keyFn(WinGetTitle("ahk_id " hwnd))
+    if (cur = startCore)
+        return
+    Loop 30 {
+        SendInput key
+        Sleep 130
+        if (keyFn(WinGetTitle("ahk_id " hwnd)) = startCore)
+            return
+    }
+}
+
 ; === 绑定当前窗口 ===
 BindWindow(n, *) {
     global Slot
@@ -83,45 +180,6 @@ BindWindow(n, *) {
     title := WinGetTitle("ahk_id " hwnd)
     Slot[n] := { hwnd: hwnd, title: title }
     ShowTip("Slot " n " 已绑定: " title, 2000)
-}
-
-; === 标签页轮询（浏览器，按完整标题包含匹配）===
-;  必须使用 Ctrl+PageDown 按标签"顺序"遍历：Chrome/Edge 的 Ctrl+Tab 默认按
-;  "最近使用"顺序切换，只会来回跳转最后两个标签，永远遍历不到其它标签——
-;  这正是"多开一个页面就找不到"的根因。Ctrl+PageDown 会左→右依次经过每个
-;  标签并在末尾回环到第一个。
-CycleBrowserTabs(hwnd, targetTitle, n) {
-    cur := WinGetTitle("ahk_id " hwnd)
-    if InStr(cur, targetTitle) {
-        ShowTip("Slot " n ": " targetTitle, 1200)
-        return
-    }
-
-    start := cur
-    prev := cur
-    ; 最多尝试 30 次；转完一圈(回到起点)或按键不再推进即停止
-    Loop 30 {
-        SendInput "^{PgDn}"
-        Sleep 60
-        cur := WinGetTitle("ahk_id " hwnd)
-        if InStr(cur, targetTitle) {
-            ShowTip("Slot " n " 已定位: " targetTitle, 1500)
-            return
-        }
-        ; 已绕回起点 → 全部标签页都不匹配，提前结束
-        if (cur = start) {
-            ShowTip("Slot " n " 未找到: " targetTitle, 2500)
-            return
-        }
-        ; 按键没有推进（标签未变化，部分浏览器不回环）→ 避免空转到上限
-        if (cur = prev) {
-            ShowTip("Slot " n " 未找到: " targetTitle, 2500)
-            return
-        }
-        prev := cur
-    }
-
-    ShowTip("Slot " n " 未找到: " targetTitle, 2500)
 }
 
 ; === 跳转到绑定窗口 ===
@@ -145,38 +203,40 @@ JumpToWindow(n) {
 
     app := GetApp(s.hwnd)
     if (app = "Browser") {
-        CycleBrowserTabs(s.hwnd, s.title, n)
+        targetCore := BrowserPageTitle(s.title)
+        mF := (t) => InStr(BrowserPageTitle(t), targetCore)
+        kF := BrowserPageTitle
+        startCore := BrowserPageTitle(WinGetTitle("ahk_id " s.hwnd))
+
+        ; 正向遍历；若浏览器不回环("设置"等)且目标在左侧，再反向兜底
+        r := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
+        if !r.found && !r.wrapped
+            r := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
+
+        if !r.found {
+            RestoreToStart(s.hwnd, "^{PgDn}", startCore, kF)
+            ShowTip("Slot " n " 未找到: " targetCore, 2500)
+        }
+        ; 无论是否找到，都把焦点送回页面（空格可控制视频）
+        FocusPage(s.hwnd)
     } else if (app = "VSCode") {
         name := VSCodeFileName(s.title)
         if !name {
             ShowTip("Slot " n " 无法解析文件名", 2000)
             return
         }
-        cur := WinGetTitle("ahk_id " s.hwnd)
-        if (VSCodeFileName(cur) = name) {
-            ShowTip("Slot " n ": " name, 1200)
-            return
+        mF := (t) => VSCodeFileName(t) = name
+        kF := VSCodeFileName
+        startCore := VSCodeFileName(WinGetTitle("ahk_id " s.hwnd))
+
+        r := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
+        if !r.found && !r.wrapped
+            r := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
+
+        if !r.found {
+            RestoreToStart(s.hwnd, "^{PgDn}", startCore, kF)
+            ShowTip("Slot " n " 未找到: " name, 2500)
         }
-        start := cur
-        prev := cur
-        ; VS Code 用 Ctrl+PageDown 顺序切换编辑器，标题会立即更新
-        Loop 30 {
-            SendInput "^{PgDn}"
-            Sleep 60
-            cur := WinGetTitle("ahk_id " s.hwnd)
-            if (VSCodeFileName(cur) = name) {
-                ShowTip("Slot " n " 已定位: " name, 1500)
-                return
-            }
-            ; 绕回起点 → 当前编辑器组里没有该文件，提前结束
-            if (cur = start)
-                break
-            ; 按键没有推进（到达末尾且不回环）→ 提前结束
-            if (cur = prev)
-                break
-            prev := cur
-        }
-        ShowTip("Slot " n " 未找到: " name, 2500)
     } else {
         ShowTip("Slot " n ": " s.title, 1200)
     }
@@ -203,11 +263,9 @@ OnExit(Cleanup)
 
 Cleanup(*) {
     global Slot
-
     Loop 9
         Slot[A_Index] := 0
-    ToolTip "QuickJump 已退出"
-    Sleep 500
+    ShowTip("QuickJump 已退出", 1200)
 }
 
 ; === 启动提示 ===
