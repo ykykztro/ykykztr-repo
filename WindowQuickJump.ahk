@@ -80,9 +80,11 @@ VSCodeFileName(title) {
     return Trim(t)
 }
 
-; === 去掉浏览器标题后缀，只留"页面标题核心" ===
-;  Chrome/Edge 标题形如 "页面名 - Google Chrome" / "页面名 - Microsoft Edge"。
-;  去掉浏览器名后缀后做匹配，可规避 YouTube 等动态前缀(▶/⏸)的干扰。
+; === 去掉浏览器标题后缀与动态前缀，只留"页面标题核心" ===
+;  Chrome/Edge 标题形如 "▶ My Video - YouTube - Microsoft Edge"。
+;  - 去后缀（浏览器名）：避免匹配到 " - Microsoft Edge" 这类；
+;  - 去开头媒体/状态符号（▶ ⏸ 🔴 ● ◉ ► ⏯ ❚❚）：视频播放/暂停状态切换时
+;    前缀会变化，归一化后绑定与查找两端一致，不再因状态变化而匹配失败。
 BrowserPageTitle(title) {
     t := title
     suffixes := [" - Google Chrome", " - Microsoft Edge", " - Microsoft Edge (Chromium)"]
@@ -91,18 +93,29 @@ BrowserPageTitle(title) {
         if idx
             t := SubStr(t, 1, idx - 1)
     }
+    t := RegExReplace(t, "^[▶⏸🔴●◉►⏯❚❚\s]+", "")
     return Trim(t)
 }
 
 ; === 把键盘焦点送回网页渲染控件（解决"停在设置和其他"）===
-;  切回浏览器标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏，
-;  导致空格无法控制网页视频。把焦点交给页面的渲染控件即可恢复。
+;  按 Alt+N 跳回浏览器时，Edge 可能把焦点停在右上角 ⋮ 菜单（"设置和其他"）
+;  或标签栏，导致空格无法控制网页视频。这里先确保窗口前台、关掉残留菜单，
+;  再把键盘焦点显式交给页面渲染控件（Chrome_RenderWidgetHostHWND*）。
 FocusPage(hwnd) {
     try {
-        ; 直接按控件名把键盘焦点送回页面渲染控件，避免视频空格失效
-        ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
-    } catch {
-        ; 控件不存在（极少见）→ 不做处理，焦点大概率已在页面
+        WinActivate("ahk_id " hwnd)
+        Sleep 60
+        ; 关闭可能残留的 ⋮ 菜单 / 浮层（普通网页无害，最坏退出全屏，可接受）
+        SendInput "{Esc}"
+        Sleep 40
+    }
+    ; 枚举页面渲染控件并把键盘焦点交给它；任一成功即停
+    controls := ["Chrome_RenderWidgetHostHWND1", "Chrome_RenderWidgetHostHWND"]
+    for c in controls {
+        try {
+            ControlFocus(c, "ahk_id " hwnd)
+            break
+        }
     }
 }
 
@@ -142,11 +155,16 @@ CycleTabs(hwnd, key, matchesFn, keyFn, n, label) {
 
     Loop 30 {
         SendInput key
-        ; 等待标题真正切换（最多 500ms），避免读到切换前的旧标题
-        newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 500)
+        ; 等待标题真正切换（最多 900ms），避免读到切换前的旧标题
+        newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 900)
         if (newCore = "") {
-            ; 按键后标题在超时内始终未变 → 该方向已到头 / 浏览器不回环
-            break
+            ; 偶发卡顿致标题未及时刷新：重发一次切换键再等一轮
+            SendInput key
+            newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 900)
+            if (newCore = "") {
+                ; 两次尝试标题都未变 → 该方向已到头 / 浏览器不回环
+                break
+            }
         }
         if matchesFn(WinGetTitle("ahk_id " hwnd)) {
             ShowTip(label " 已定位", 1500)
@@ -176,7 +194,7 @@ RestoreToStart(hwnd, key, startCore, keyFn) {
         return
     Loop 30 {
         SendInput key
-        newCore := WaitTitleChange(hwnd, keyFn, keyFn(WinGetTitle("ahk_id " hwnd)), 500)
+        newCore := WaitTitleChange(hwnd, keyFn, keyFn(WinGetTitle("ahk_id " hwnd)), 900)
         if (newCore = "")
             break
         if (newCore = startCore)
