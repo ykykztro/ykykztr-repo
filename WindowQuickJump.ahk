@@ -80,9 +80,11 @@ VSCodeFileName(title) {
     return Trim(t)
 }
 
-; === 去掉浏览器标题后缀，只留"页面标题核心" ===
+; === 去掉浏览器标题后缀+媒体前缀，只留"页面标题核心" ===
 ;  Chrome/Edge 标题形如 "页面名 - Google Chrome" / "页面名 - Microsoft Edge"。
-;  去掉浏览器名后缀后做匹配，可规避 YouTube 等动态前缀(▶/⏸)的干扰。
+;  - 去掉浏览器名后缀后做匹配；
+;  - 去掉开头的媒体状态符号(▶播放/⏸暂停/🔴直播/●录制)，这些会随播放状态变化，
+;    导致"绑定时在播、切回时暂停"这类场景下子串匹配失败。
 BrowserPageTitle(title) {
     t := title
     suffixes := [" - Google Chrome", " - Microsoft Edge", " - Microsoft Edge (Chromium)"]
@@ -91,19 +93,52 @@ BrowserPageTitle(title) {
         if idx
             t := SubStr(t, 1, idx - 1)
     }
+    ; 去掉开头的媒体播放状态符号（循环去掉连续的符号字符）
+    mediaSymbols := "▶⏸🔴●◼▮■"
+    while (InStr(mediaSymbols, SubStr(t, 1, 1)))
+        t := SubStr(t, 2)
     return Trim(t)
 }
 
 ; === 把键盘焦点送回网页渲染控件（解决"停在设置和其他"）===
-;  切回浏览器标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏，
+;  切回浏览器标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏 / 地址栏，
 ;  导致空格无法控制网页视频。把焦点交给页面的渲染控件即可恢复。
 FocusPage(hwnd) {
     try {
-        ; 直接按控件名把键盘焦点送回页面渲染控件，避免视频空格失效
+        ; 优先按完整 ClassNN 聚焦页面渲染控件
         ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
     } catch {
-        ; 控件不存在（极少见）→ 不做处理，焦点大概率已在页面
+        try {
+            ; 个别 Chromium 版本编号不同，尝试无编号版本兜底
+            ControlFocus("Chrome_RenderWidgetHostHWND", "ahk_id " hwnd)
+        } catch {
+            ; 都不存在则不做处理，焦点大概率已在页面
+        }
     }
+}
+
+; === 用浏览器"标签搜索"面板直接定位（Edge/Chrome: Ctrl+Shift+A）===
+;  不受标签数量/顺序/睡眠标签影响，直接按标题搜索并跳转，比顺序遍历可靠得多。
+FindTabBySearch(hwnd, keyword, n, label) {
+    WinActivate("ahk_id " hwnd)
+    Sleep 150
+    SendInput "^+a"          ; 打开标签搜索面板
+    Sleep 650               ; 等面板出现并聚焦搜索框
+    SendInput "^a{Delete}"  ; 清空可能残留的搜索词
+    Sleep 120
+    SendInput keyword       ; 输入关键词
+    Sleep 700               ; 等实时过滤完成
+    SendInput "{Enter}"     ; 跳转到第一个匹配结果
+    Sleep 450
+    ; 验证是否到达目标页
+    cur := BrowserPageTitle(WinGetTitle("ahk_id " hwnd))
+    if (InStr(cur, keyword) || InStr(keyword, cur)) {
+        ShowTip(label " 已定位", 1500)
+        return true
+    }
+    SendInput "{Esc}"        ; 未命中则关闭面板
+    Sleep 150
+    return false
 }
 
 ; === 标签页轮询：等待标题真正切换（规避读到切换前的旧标题）===
@@ -143,7 +178,7 @@ CycleTabs(hwnd, key, matchesFn, keyFn, n, label) {
     Loop 30 {
         SendInput key
         ; 等待标题真正切换（最多 500ms），避免读到切换前的旧标题
-        newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 500)
+        newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 1200)
         if (newCore = "") {
             ; 按键后标题在超时内始终未变 → 该方向已到头 / 浏览器不回环
             break
@@ -176,7 +211,7 @@ RestoreToStart(hwnd, key, startCore, keyFn) {
         return
     Loop 30 {
         SendInput key
-        newCore := WaitTitleChange(hwnd, keyFn, keyFn(WinGetTitle("ahk_id " hwnd)), 500)
+        newCore := WaitTitleChange(hwnd, keyFn, keyFn(WinGetTitle("ahk_id " hwnd)), 1200)
         if (newCore = "")
             break
         if (newCore = startCore)
@@ -221,18 +256,32 @@ JumpToWindow(n) {
     app := GetApp(s.hwnd)
     if (app = "Browser") {
         targetCore := BrowserPageTitle(s.title)
-        mF := (t) => InStr(BrowserPageTitle(t), targetCore)
+        ; 搜索关键词：取到第一个 " - " 之前的主标题（稳定且具区分度），并限长避免输入过慢
+        dashIdx := InStr(targetCore, " - ")
+        keyword := dashIdx ? SubStr(targetCore, 1, dashIdx - 1) : targetCore
+        if (StrLen(keyword) > 40)
+            keyword := SubStr(keyword, 1, 40)
+        if (keyword = "")
+            keyword := targetCore
+
+        ; 匹配函数：当前页核心 与 绑定核心 任一包含对方即视为命中
+        mF(title) {
+            c := BrowserPageTitle(title)
+            return InStr(c, targetCore) || InStr(targetCore, c)
+        }
         kF := BrowserPageTitle
         startCore := BrowserPageTitle(WinGetTitle("ahk_id " s.hwnd))
 
-        ; 正向遍历；若浏览器不回环且目标在左侧，再反向兜底
-        found := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
+        ; 优先用标签搜索面板（不受标签数/顺序影响）；失败再顺序遍历兜底
+        found := FindTabBySearch(s.hwnd, keyword, n, "Slot " n)
+        if !found
+            found := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
         if !found
             found := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
 
         if !found {
             RestoreToStart(s.hwnd, "^{PgDn}", startCore, kF)
-            ShowTip("Slot " n " 未找到: " targetCore, 2500)
+            ShowTip("Slot " n " 未找到: " keyword, 2500)
         }
         ; 无论是否找到，都把焦点送回页面（空格可控制视频）
         FocusPage(s.hwnd)
