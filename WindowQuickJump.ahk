@@ -100,7 +100,7 @@ BrowserPageTitle(title) {
 FocusPage(hwnd) {
     try {
         ControlGet(&h, "Hwnd",, "Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
-        ControlFocus(, "ahk_id " h)
+        ControlFocus(h, "ahk_id " hwnd)
     } catch {
         ; 控件不存在（极少见）→ 不做处理，焦点大概率已在页面
     }
@@ -225,18 +225,26 @@ JumpToWindow(n) {
             ShowTip("Slot " n " 无法解析文件名", 2000)
             return
         }
-        mF := (t) => VSCodeFileName(t) = name
-        kF := VSCodeFileName
-        startCore := VSCodeFileName(WinGetTitle("ahk_id " s.hwnd))
-
-        r := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
-        if !r.found && !r.wrapped
-            r := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
-
-        if !r.found {
-            RestoreToStart(s.hwnd, "^{PgDn}", startCore, kF)
-            ShowTip("Slot " n " 未找到: " name, 2500)
+        ; 已在该文件 → 直接确认，避免弹快速打开框闪烁
+        if (VSCodeFileName(WinGetTitle("ahk_id " s.hwnd)) = name) {
+            ShowTip("Slot " n ": " name, 1200)
+            return
         }
+        ; 用 Ctrl+P 快速打开按文件名直达：不依赖标签页方向键，
+        ; 不受"最近使用"顺序影响，也支持分屏/多编辑器组。
+        SendInput "^p"
+        Sleep 250
+        SendInput "^a{Delete}"        ; 清空可能残留的输入
+        Sleep 60
+        SendInput name                ; 输入文件名
+        Sleep 400
+        SendInput "{Enter}"
+        Sleep 200
+        cur := WinGetTitle("ahk_id " s.hwnd)
+        if (VSCodeFileName(cur) = name)
+            ShowTip("Slot " n " 已定位: " name, 1500)
+        else
+            ShowTip("Slot " n " 未找到: " name, 2500)
     } else {
         ShowTip("Slot " n ": " s.title, 1200)
     }
