@@ -1,7 +1,7 @@
 ; ============================================================
 ;  WindowQuickJump.ahk — 窗口/标签页编号直达工具
 ;  AHK v2       Alt+1~9 绑定/切换    Ctrl+Alt+1~9 强制覆盖
-;  支持：浏览器标签页 / VS Code 编辑器（按标题定位）
+;  支持：浏览器标签页（Ctrl+Shift+A 标签搜索）/ VS Code 编辑器
 ; ============================================================
 
 #Requires AutoHotkey v2.0
@@ -22,12 +22,12 @@ Slot.Length := 9
 Loop 9
     Slot[A_Index] := 0
 
-; === 浏览器类名 ===
+; === 浏览器窗口类名 ===
 BrowserClasses := ["Chrome_WidgetWin_1", "Chrome_WidgetWin_0"]
 
 ; === 右下角轻提示（置顶 GUI，不抢焦点，小窗/全屏都可见）===
-;   用屏幕坐标定位到右下角，+AlwaysOnTop 盖在最大化浏览器之上；
-;   Show 带 NoActivate，且窗口本身不接收输入，绝不会偷走键盘焦点
+;   用屏幕坐标钉在右下角，+AlwaysOnTop 盖在最大化浏览器之上；
+;   Show 带 NoActivate 且不接收输入，绝不偷走键盘焦点
 ;   （因此切回正在播放视频的标签页后，空格仍可直接控制视频）。
 ShowTip(msg, ms := 1500) {
     static g := "", t := ""
@@ -43,48 +43,42 @@ ShowTip(msg, ms := 1500) {
 }
 
 ; === 判断应用类型 ===
-;  注意：VS Code 与 Chrome 同属 Chrome_WidgetWin_1 窗口类，
-;  因此必须先按进程名区分 Code.exe，否则会被误判为浏览器而用错按键。
+;  VS Code 与 Chrome 同属 Chrome_WidgetWin_1 窗口类，必须先按进程名区分
+;  Code.exe，否则会被误判为浏览器而用错按键。
 GetApp(hwnd) {
     global BrowserClasses
-
     try proc := WinGetProcessName("ahk_id " hwnd)
     if (proc = "Code.exe")
         return "VSCode"
-
     cls := WinGetClass("ahk_id " hwnd)
     for c in BrowserClasses {
-        if cls = c
+        if (cls = c)
             return "Browser"
     }
     return "Other"
 }
 
-; === 从 VS Code 窗口标题中提取当前编辑器文件名 ===
-;  标题格式通常为 "文件名.ext - 项目名 - Visual Studio Code"，
-;  取第一段并去掉未保存标记 ● / *。
+; === 从 VS Code 窗口标题提取当前编辑器文件名 ===
+;  标题形如 "文件名.ext - 项目名 - Visual Studio Code"，取第一段并去掉 ●/* 未保存标记。
 VSCodeFileName(title) {
     t := title
-    ; 去掉后缀 " - Visual Studio Code"
     idx := InStr(t, " - Visual Studio Code")
     if idx
         t := SubStr(t, 1, idx - 1)
-    ; 第一段（按 " - " 或 " — " 分隔）即为文件名
     if InStr(t, " - ")
         t := SubStr(t, 1, InStr(t, " - ") - 1)
     else if InStr(t, " — ")
         t := SubStr(t, 1, InStr(t, " — ") - 1)
-    ; 去掉未保存标记 ● / *
     while (SubStr(t, 1, 1) = "●" || SubStr(t, 1, 1) = "*")
         t := SubStr(t, 2)
     return Trim(t)
 }
 
-; === 去掉浏览器标题后缀+媒体前缀，只留"页面标题核心" ===
-;  Chrome/Edge 标题形如 "页面名 - Google Chrome" / "页面名 - Microsoft Edge"。
-;  - 去掉浏览器名后缀后做匹配；
-;  - 去掉开头的媒体状态符号(▶播放/⏸暂停/🔴直播/●录制)，这些会随播放状态变化，
-;    导致"绑定时在播、切回时暂停"这类场景下子串匹配失败。
+; === 干净标签页名字：去掉浏览器后缀 + 媒体播放前缀 ===
+;  形如 "▶ 视频名 - Microsoft Edge" → "视频名"。
+;  - 去浏览器名后缀，只留页面标题；
+;  - 去开头的媒体状态符号(▶播放/⏸暂停/🔴直播/●录制)，这些随播放状态变化，
+;    会导致"绑定时在播、切回时暂停"时匹配不上。
 BrowserPageTitle(title) {
     t := title
     suffixes := [" - Google Chrome", " - Microsoft Edge", " - Microsoft Edge (Chromium)"]
@@ -93,7 +87,6 @@ BrowserPageTitle(title) {
         if idx
             t := SubStr(t, 1, idx - 1)
     }
-    ; 去掉开头的媒体播放状态符号（循环去掉连续的符号字符）
     mediaSymbols := "▶⏸🔴●◼▮■"
     while (InStr(mediaSymbols, SubStr(t, 1, 1)))
         t := SubStr(t, 2)
@@ -101,39 +94,32 @@ BrowserPageTitle(title) {
 }
 
 ; === 把键盘焦点送回网页渲染控件（解决"停在设置和其他"）===
-;  切回浏览器标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏 / 地址栏，
-;  导致空格无法控制网页视频。把焦点交给页面的渲染控件即可恢复。
+;  切回标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏 / 地址栏，
+;  导致空格无法控制网页视频。把焦点交给页面渲染控件即可恢复。
 FocusPage(hwnd) {
-    try {
-        ; 优先按完整 ClassNN 聚焦页面渲染控件
-        ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
-    } catch {
-        try {
-            ; 个别 Chromium 版本编号不同，尝试无编号版本兜底
-            ControlFocus("Chrome_RenderWidgetHostHWND", "ahk_id " hwnd)
-        } catch {
-            ; 都不存在则不做处理，焦点大概率已在页面
-        }
-    }
+    ; 优先按完整 ClassNN 聚焦；失败再试无编号版本；都不存在则忽略
+    if !ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
+        ControlFocus("Chrome_RenderWidgetHostHWND", "ahk_id " hwnd)
 }
 
 ; === 用浏览器"标签搜索"面板直接定位（Edge/Chrome: Ctrl+Shift+A）===
-;  不受标签数量/顺序/睡眠标签影响，直接按标题搜索并跳转，比顺序遍历可靠得多。
-FindTabBySearch(hwnd, keyword, n, label) {
+;  直接按标签页名字搜索并跳转，不受标签数量/顺序/新建标签/睡眠标签影响。
+FindTabBySearch(hwnd, name, n) {
+    if (name = "")
+        return false
     WinActivate("ahk_id " hwnd)
     Sleep 150
     SendInput "^+a"          ; 打开标签搜索面板
     Sleep 650               ; 等面板出现并聚焦搜索框
     SendInput "^a{Delete}"  ; 清空可能残留的搜索词
     Sleep 120
-    SendInput keyword       ; 输入关键词
+    SendInput name          ; 输入标签页名字
     Sleep 700               ; 等实时过滤完成
     SendInput "{Enter}"     ; 跳转到第一个匹配结果
     Sleep 450
-    ; 验证是否到达目标页
-    cur := BrowserPageTitle(WinGetTitle("ahk_id " hwnd))
-    if (InStr(cur, keyword) || InStr(keyword, cur)) {
-        ShowTip(label " 已定位", 1500)
+    ; 精确匹配到目标页才认为成功
+    if (BrowserPageTitle(WinGetTitle("ahk_id " hwnd)) = name) {
+        ShowTip("Slot " n " 已定位", 1500)
         return true
     }
     SendInput "{Esc}"        ; 未命中则关闭面板
@@ -141,53 +127,39 @@ FindTabBySearch(hwnd, keyword, n, label) {
     return false
 }
 
-; === 标签页轮询：等待标题真正切换（规避读到切换前的旧标题）===
-;  发送切换键后，轮询直到 keyFn(标题) 与 prevCore 不同；超时则返回空串。
-WaitTitleChange(hwnd, keyFn, prevCore, timeoutMs) {
-    end := A_TickCount + timeoutMs
-    Loop {
-        cur := keyFn(WinGetTitle("ahk_id " hwnd))
-        if (cur != prevCore)
-            return cur
-        if (A_TickCount > end)
-            return ""
-        Sleep 25
-    }
-}
-
-; === 通用标签页遍历 ===
-;  key        : 切换按键，如 "^{PgDn}"（正向）/ "^{PgUp}"（反向）
-;  matchesFn  : 传入当前标题，返回是否已定位到目标
-;  keyFn      : 提取"可比核心"（如 BrowserPageTitle）用于回环判定
-;  返回 true/false
-;  关键改进（解决"多开标签后找不到"）：
-;   - 每步发送切换键后【等待标题真正变化】再读，彻底避免固定 130ms 延时在
-;     标签多/浏览器卡顿时读到旧标题、误判"到底"而提前放弃；
-;   - 用"已见标题集合"检测回环：回到起点或遇到本轮已见标题即停止一整圈，
-;     即便起点标签标题中途变化（如后台标签加载完）也能正确判定。
+; === 顺序遍历兜底（搜索面板不可用/未命中时）===
+;  key       : 切换键，如 "^{PgDn}"(正向) / "^{PgUp}"(反向)
+;  matchesFn : 传入当前标题，返回是否到达目标
+;  keyFn     : 提取"可比核心"用于回环判定
+;  发送切换键后轮询等待标题真正变化再读，规避读到旧标题导致提前放弃；
+;  用"已见标题集合"检测回环：绕回起点即停止一整圈。
 CycleTabs(hwnd, key, matchesFn, keyFn, n, label) {
-    cur := WinGetTitle("ahk_id " hwnd)
-    if matchesFn(cur) {
+    if matchesFn(WinGetTitle("ahk_id " hwnd)) {
         ShowTip(label " 已定位", 1200)
         return true
     }
-
-    start := keyFn(cur)
-    seen := [start]
-
+    seen := [keyFn(WinGetTitle("ahk_id " hwnd))]
     Loop 30 {
         SendInput key
-        ; 等待标题真正切换（最多 500ms），避免读到切换前的旧标题
-        newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 1200)
-        if (newCore = "") {
-            ; 按键后标题在超时内始终未变 → 该方向已到头 / 浏览器不回环
-            break
+        ; 等待标题真正切换（最多 1200ms）
+        newCore := ""
+        end := A_TickCount + 1200
+        Loop {
+            cur := keyFn(WinGetTitle("ahk_id " hwnd))
+            if (cur != seen[seen.Length]) {
+                newCore := cur
+                break
+            }
+            if (A_TickCount > end)
+                break
+            Sleep 25
         }
+        if (newCore = "")        ; 标题始终未变 → 该方向已到头
+            break
         if matchesFn(WinGetTitle("ahk_id " hwnd)) {
             ShowTip(label " 已定位", 1500)
             return true
         }
-        ; 绕回起点或遇到本轮已见过的标题 → 完成一整圈遍历
         inSeen := false
         for v in seen {
             if (v = newCore) {
@@ -195,124 +167,95 @@ CycleTabs(hwnd, key, matchesFn, keyFn, n, label) {
                 break
             }
         }
-        if (inSeen)
+        if (inSeen)              ; 绕回起点 → 完成一整圈
             break
         seen.Push(newCore)
         if (seen.Length > 40)
             break
     }
-
     return false
 }
 
-; === 把浏览器切回起始标签，避免"找不到"时把用户留在别的标签 ===
-RestoreToStart(hwnd, key, startCore, keyFn) {
-    if (keyFn(WinGetTitle("ahk_id " hwnd)) = startCore)
-        return
-    Loop 30 {
-        SendInput key
-        newCore := WaitTitleChange(hwnd, keyFn, keyFn(WinGetTitle("ahk_id " hwnd)), 1200)
-        if (newCore = "")
-            break
-        if (newCore = startCore)
-            return
-    }
-}
-
-; === 绑定当前窗口 ===
+; === 绑定当前窗口（存储干净的标签页名字）===
 BindWindow(n, *) {
     global Slot
-
     hwnd := WinExist("A")
     if !hwnd || WinActive("ahk_group QJSelf") {
         ShowTip("不能绑定此窗口", 1500)
         return
     }
-
     title := WinGetTitle("ahk_id " hwnd)
-    Slot[n] := { hwnd: hwnd, title: title }
-    ShowTip("Slot " n " 已绑定: " title, 2000)
+    app := GetApp(hwnd)
+    ; 存干净的"标签页名字"：浏览器去后缀/媒体前缀，VS Code 取文件名，其他用原标题
+    name := (app = "Browser") ? BrowserPageTitle(title)
+          : (app = "VSCode")  ? VSCodeFileName(title)
+          : title
+    Slot[n] := { hwnd: hwnd, name: name }
+    ShowTip("Slot " n " 已绑定: " name, 2000)
 }
 
 ; === 跳转到绑定窗口 ===
 JumpToWindow(n) {
     global Slot
-
     s := Slot[n]
     if !s {
         ShowTip("Slot " n " 未绑定", 1500)
         return
     }
-
     if !WinExist("ahk_id " s.hwnd) {
-        ShowTip("Slot " n " 窗口已关闭: " s.title, 3000)
+        ShowTip("Slot " n " 窗口已关闭: " s.name, 3000)
         Slot[n] := 0
         return
     }
-
     WinActivate("ahk_id " s.hwnd)
     Sleep 100
 
     app := GetApp(s.hwnd)
     if (app = "Browser") {
-        targetCore := BrowserPageTitle(s.title)
-        ; 搜索关键词：取到第一个 " - " 之前的主标题（稳定且具区分度），并限长避免输入过慢
-        dashIdx := InStr(targetCore, " - ")
-        keyword := dashIdx ? SubStr(targetCore, 1, dashIdx - 1) : targetCore
-        if (StrLen(keyword) > 40)
-            keyword := SubStr(keyword, 1, 40)
-        if (keyword = "")
-            keyword := targetCore
-
-        ; 匹配函数：当前页核心 与 绑定核心 任一包含对方即视为命中
-        mF(title) {
-            c := BrowserPageTitle(title)
-            return InStr(c, targetCore) || InStr(targetCore, c)
+        name := s.name
+        mF(t) {
+            return InStr(BrowserPageTitle(t), name)
         }
-        kF := BrowserPageTitle
-        startCore := BrowserPageTitle(WinGetTitle("ahk_id " s.hwnd))
-
-        ; 优先用标签搜索面板（不受标签数/顺序影响）；失败再顺序遍历兜底
-        found := FindTabBySearch(s.hwnd, keyword, n, "Slot " n)
-        if !found
-            found := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
-        if !found
-            found := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
-
-        if !found {
-            RestoreToStart(s.hwnd, "^{PgDn}", startCore, kF)
-            ShowTip("Slot " n " 未找到: " keyword, 2500)
+        if (name = "") {
+            ShowTip("Slot " n " 名字为空", 1500)
+        } else if (BrowserPageTitle(WinGetTitle("ahk_id " s.hwnd)) = name) {
+            ShowTip("Slot " n " 已定位", 1200)
+        } else {
+            ; 优先用标签搜索面板直接搜这个名字；失败再顺序遍历兜底
+            found := FindTabBySearch(s.hwnd, name, n)
+            if !found {
+                if !CycleTabs(s.hwnd, "^{PgDn}", mF, BrowserPageTitle, n, "Slot " n)
+                    found := CycleTabs(s.hwnd, "^{PgUp}", mF, BrowserPageTitle, n, "Slot " n)
+                if !found
+                    ShowTip("Slot " n " 未找到: " name, 2500)
+            }
         }
-        ; 无论是否找到，都把焦点送回页面（空格可控制视频）
-        FocusPage(s.hwnd)
+        FocusPage(s.hwnd)        ; 焦点送回页面（空格可控制视频）
     } else if (app = "VSCode") {
-        name := VSCodeFileName(s.title)
+        name := s.name
         if !name {
             ShowTip("Slot " n " 无法解析文件名", 2000)
             return
         }
-        ; 已在该文件 → 直接确认，避免弹快速打开框闪烁
         if (VSCodeFileName(WinGetTitle("ahk_id " s.hwnd)) = name) {
             ShowTip("Slot " n ": " name, 1200)
             return
         }
-        ; 用 Ctrl+P 快速打开按文件名直达：不依赖标签页方向键，
-        ; 不受"最近使用"顺序影响，也支持分屏/多编辑器组。
+        ; 用 Ctrl+P 快速打开按文件名直达：不依赖标签方向键，不受分屏/多组影响
         SendInput "^p"
         Sleep 250
-        SendInput "^a{Delete}"        ; 清空可能残留的输入
+        SendInput "^a{Delete}"
         Sleep 60
-        SendInput name                ; 输入文件名
+        SendInput name
         Sleep 400
         SendInput "{Enter}"
         Sleep 200
-        cur := WinGetTitle("ahk_id " s.hwnd)
-        if (VSCodeFileName(cur) = name)
+        if (VSCodeFileName(WinGetTitle("ahk_id " s.hwnd)) = name)
             ShowTip("Slot " n " 已定位: " name, 1500)
         else
             ShowTip("Slot " n " 未找到: " name, 2500)
     } else {
-        ShowTip("Slot " n ": " s.title, 1200)
+        ShowTip("Slot " n ": " s.name, 1200)
     }
 }
 
@@ -325,7 +268,6 @@ Loop 9 {
 
 QuickJump(n, *) {
     global Slot
-
     if Slot[n]
         JumpToWindow(n)
     else
@@ -334,7 +276,6 @@ QuickJump(n, *) {
 
 ; === 退出清理 ===
 OnExit(Cleanup)
-
 Cleanup(*) {
     global Slot
     Loop 9
