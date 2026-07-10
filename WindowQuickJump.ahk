@@ -106,63 +106,80 @@ FocusPage(hwnd) {
     }
 }
 
+; === 标签页轮询：等待标题真正切换（规避读到切换前的旧标题）===
+;  发送切换键后，轮询直到 keyFn(标题) 与 prevCore 不同；超时则返回空串。
+WaitTitleChange(hwnd, keyFn, prevCore, timeoutMs) {
+    end := A_TickCount + timeoutMs
+    Loop {
+        cur := keyFn(WinGetTitle("ahk_id " hwnd))
+        if (cur != prevCore)
+            return cur
+        if (A_TickCount > end)
+            return ""
+        Sleep 25
+    }
+}
+
 ; === 通用标签页遍历 ===
-;  key        : 用于切换的按键，如 "^{PgDn}"（正向）/ "^{PgUp}"（反向）
+;  key        : 切换按键，如 "^{PgDn}"（正向）/ "^{PgUp}"（反向）
 ;  matchesFn  : 传入当前标题，返回是否已定位到目标
-;  keyFn      : 提取"可比核心"（用于起点/卡住判定），如 BrowserPageTitle
-;  返回 {found:bool, wrapped:bool}
-;  关键点：
-;   - Sleep 130：留出标签切换后标题刷新的时间（之前 60ms 太短会误判卡住）
-;   - 连续两步标题无变化(same>=2)才判定到底：避免单步偶发不刷新导致误放弃
-;   - 回到起点(start)判定：处理会回环的浏览器的一整圈遍历
+;  keyFn      : 提取"可比核心"（如 BrowserPageTitle）用于回环判定
+;  返回 true/false
+;  关键改进（解决"多开标签后找不到"）：
+;   - 每步发送切换键后【等待标题真正变化】再读，彻底避免固定 130ms 延时在
+;     标签多/浏览器卡顿时读到旧标题、误判"到底"而提前放弃；
+;   - 用"已见标题集合"检测回环：回到起点或遇到本轮已见标题即停止一整圈，
+;     即便起点标签标题中途变化（如后台标签加载完）也能正确判定。
 CycleTabs(hwnd, key, matchesFn, keyFn, n, label) {
     cur := WinGetTitle("ahk_id " hwnd)
     if matchesFn(cur) {
         ShowTip(label " 已定位", 1200)
-        return { found: true, wrapped: false }
+        return true
     }
 
     start := keyFn(cur)
-    prev := start
-    same := 0
-    wrapped := false
+    seen := [start]
 
     Loop 30 {
         SendInput key
-        Sleep 130
-        cur := WinGetTitle("ahk_id " hwnd)
-        if matchesFn(cur) {
+        ; 等待标题真正切换（最多 500ms），避免读到切换前的旧标题
+        newCore := WaitTitleChange(hwnd, keyFn, seen[seen.Length], 500)
+        if (newCore = "") {
+            ; 按键后标题在超时内始终未变 → 该方向已到头 / 浏览器不回环
+            break
+        }
+        if matchesFn(WinGetTitle("ahk_id " hwnd)) {
             ShowTip(label " 已定位", 1500)
-            return { found: true, wrapped: wrapped }
+            return true
         }
-        ck := keyFn(cur)
-        ; 已绕回起点 → 整圈遍历完，全部标签都不匹配
-        if (ck = start) {
-            wrapped := true
-            break
+        ; 绕回起点或遇到本轮已见过的标题 → 完成一整圈遍历
+        inSeen := false
+        for v in seen {
+            if (v = newCore) {
+                inSeen := true
+                break
+            }
         }
-        ; 连续两步标题无变化 → 已到末尾且不回环，避免空转到上限
-        if (ck = prev)
-            same++
-        else
-            same := 0
-        if (same >= 2)
+        if (inSeen)
             break
-        prev := ck
+        seen.Push(newCore)
+        if (seen.Length > 40)
+            break
     }
 
-    return { found: false, wrapped: wrapped }
+    return false
 }
 
-; === 把浏览器/编辑器切回起始标签，避免"找不到"时把用户留在别的标签 ===
+; === 把浏览器切回起始标签，避免"找不到"时把用户留在别的标签 ===
 RestoreToStart(hwnd, key, startCore, keyFn) {
-    cur := keyFn(WinGetTitle("ahk_id " hwnd))
-    if (cur = startCore)
+    if (keyFn(WinGetTitle("ahk_id " hwnd)) = startCore)
         return
     Loop 30 {
         SendInput key
-        Sleep 130
-        if (keyFn(WinGetTitle("ahk_id " hwnd)) = startCore)
+        newCore := WaitTitleChange(hwnd, keyFn, keyFn(WinGetTitle("ahk_id " hwnd)), 500)
+        if (newCore = "")
+            break
+        if (newCore = startCore)
             return
     }
 }
@@ -208,12 +225,12 @@ JumpToWindow(n) {
         kF := BrowserPageTitle
         startCore := BrowserPageTitle(WinGetTitle("ahk_id " s.hwnd))
 
-        ; 正向遍历；若浏览器不回环("设置"等)且目标在左侧，再反向兜底
-        r := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
-        if !r.found && !r.wrapped
-            r := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
+        ; 正向遍历；若浏览器不回环且目标在左侧，再反向兜底
+        found := CycleTabs(s.hwnd, "^{PgDn}", mF, kF, n, "Slot " n)
+        if !found
+            found := CycleTabs(s.hwnd, "^{PgUp}", mF, kF, n, "Slot " n)
 
-        if !r.found {
+        if !found {
             RestoreToStart(s.hwnd, "^{PgDn}", startCore, kF)
             ShowTip("Slot " n " 未找到: " targetCore, 2500)
         }
