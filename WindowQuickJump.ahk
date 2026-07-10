@@ -99,8 +99,8 @@ BrowserPageTitle(title) {
 ;  导致空格无法控制网页视频。把焦点交给页面的渲染控件即可恢复。
 FocusPage(hwnd) {
     try {
-        ControlGet(&h, "Hwnd",, "Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
-        ControlFocus(h, "ahk_id " hwnd)
+        ; 直接按控件名把键盘焦点送回页面渲染控件，避免视频空格失效
+        ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
     } catch {
         ; 控件不存在（极少见）→ 不做处理，焦点大概率已在页面
     }
