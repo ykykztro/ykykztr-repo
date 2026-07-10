@@ -74,19 +74,39 @@ VSCodeFileName(title) {
     return Trim(t)
 }
 
-; === 干净标签页名字：去掉浏览器后缀 + 媒体播放前缀 ===
-;  形如 "▶ 视频名 - Microsoft Edge" → "视频名"。
-;  - 去浏览器名后缀，只留页面标题；
-;  - 去开头的媒体状态符号(▶播放/⏸暂停/🔴直播/●录制)，这些随播放状态变化，
-;    会导致"绑定时在播、切回时暂停"时匹配不上。
+; === 干净标签页名字：去浏览器后缀 + 多标签计数 + profile名 + 媒体前缀 ===
+;  Edge 多标签时标题形如：
+;    "编程导航 - 一站式程序员学习交流社区 和另外 4 个页面 - 个人 - Microsoft Edge"
+;  需要依次去掉：浏览器后缀 → "和另外N个页面" → profile名(Edge特有) → 媒体前缀
+;  最终只留干净的页面标题 "编程导航 - 一站式程序员学习交流社区"。
 BrowserPageTitle(title) {
     t := title
+    isEdge := false
     suffixes := [" - Google Chrome", " - Microsoft Edge", " - Microsoft Edge (Chromium)"]
     for s in suffixes {
         idx := InStr(t, s)
-        if idx
+        if idx {
             t := SubStr(t, 1, idx - 1)
+            if (s != " - Google Chrome")
+                isEdge := true
+        }
     }
+    ; 去掉 " 和另外 N 个页面"（Edge 多标签时自动添加，标签数变化会导致匹配失败）
+    t := RegExReplace(t, " 和另外 \d+ 个\S+")
+    ; Edge 标题末尾会带 profile 名（如 "- 个人"），去掉最后一段 " - xxx"
+    if isEdge {
+        lastDash := 0
+        pos := 0
+        Loop {
+            pos := InStr(t, " - ", false, pos + 1)
+            if !pos
+                break
+            lastDash := pos
+        }
+        if lastDash
+            t := SubStr(t, 1, lastDash - 1)
+    }
+    ; 去掉开头的媒体状态符号(▶播放/⏸暂停/🔴直播/●录制)
     mediaSymbols := "▶⏸🔴●◼▮■"
     while (InStr(mediaSymbols, SubStr(t, 1, 1)))
         t := SubStr(t, 2)
@@ -97,9 +117,15 @@ BrowserPageTitle(title) {
 ;  切回标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏 / 地址栏，
 ;  导致空格无法控制网页视频。把焦点交给页面渲染控件即可恢复。
 FocusPage(hwnd) {
-    ; 优先按完整 ClassNN 聚焦；失败再试无编号版本；都不存在则忽略
-    if !ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
-        ControlFocus("Chrome_RenderWidgetHostHWND", "ahk_id " hwnd)
+    try {
+        ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
+    } catch {
+        try {
+            ControlFocus("Chrome_RenderWidgetHostHWND", "ahk_id " hwnd)
+        } catch {
+            ; 渲染控件不存在（极少见），焦点大概率已在页面，忽略
+        }
+    }
 }
 
 ; === 用浏览器"标签搜索"面板直接定位（Edge/Chrome: Ctrl+Shift+A）===
