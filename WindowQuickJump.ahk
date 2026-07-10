@@ -85,6 +85,10 @@ BindWindow(n, *) {
 }
 
 ; === 标签页轮询（浏览器，按完整标题包含匹配）===
+;  必须使用 Ctrl+PageDown 按标签"顺序"遍历：Chrome/Edge 的 Ctrl+Tab 默认按
+;  "最近使用"顺序切换，只会来回跳转最后两个标签，永远遍历不到其它标签——
+;  这正是"多开一个页面就找不到"的根因。Ctrl+PageDown 会左→右依次经过每个
+;  标签并在末尾回环到第一个。
 CycleBrowserTabs(hwnd, targetTitle, n) {
     cur := WinGetTitle("ahk_id " hwnd)
     if InStr(cur, targetTitle) {
@@ -93,9 +97,10 @@ CycleBrowserTabs(hwnd, targetTitle, n) {
     }
 
     start := cur
-    ; 最多尝试 30 次，但转完一圈回到起点即停止，避免无意义空转
+    prev := cur
+    ; 最多尝试 30 次；转完一圈(回到起点)或按键不再推进即停止
     Loop 30 {
-        SendInput "^{Tab}"
+        SendInput "^{PgDn}"
         Sleep 60
         cur := WinGetTitle("ahk_id " hwnd)
         if InStr(cur, targetTitle) {
@@ -107,6 +112,12 @@ CycleBrowserTabs(hwnd, targetTitle, n) {
             ShowTip("Slot " n " 未找到: " targetTitle, 2500)
             return
         }
+        ; 按键没有推进（标签未变化，部分浏览器不回环）→ 避免空转到上限
+        if (cur = prev) {
+            ShowTip("Slot " n " 未找到: " targetTitle, 2500)
+            return
+        }
+        prev := cur
     }
 
     ShowTip("Slot " n " 未找到: " targetTitle, 2500)
@@ -146,6 +157,7 @@ JumpToWindow(n) {
             return
         }
         start := cur
+        prev := cur
         ; VS Code 用 Ctrl+PageDown 顺序切换编辑器，标题会立即更新
         Loop 30 {
             SendInput "^{PgDn}"
@@ -158,6 +170,10 @@ JumpToWindow(n) {
             ; 绕回起点 → 当前编辑器组里没有该文件，提前结束
             if (cur = start)
                 break
+            ; 按键没有推进（到达末尾且不回环）→ 提前结束
+            if (cur = prev)
+                break
+            prev := cur
         }
         ShowTip("Slot " n " 未找到: " name, 2500)
     } else {
