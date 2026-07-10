@@ -25,9 +25,10 @@ Loop 9
 ; === 浏览器类名 ===
 BrowserClasses := ["Chrome_WidgetWin_1", "Chrome_WidgetWin_0"]
 
-; === 辅助函数：屏幕中央提示 ===
+; === 辅助函数：右下角轻提示（不挡视线）===
+;   负坐标 = 距屏幕右边/底边的偏移，自动贴合右下角，不受文字宽度影响。
 ShowTip(msg, ms := 1500) {
-    ToolTip msg, A_ScreenWidth // 2, A_ScreenHeight // 2 - 50
+    ToolTip msg, -16, -52
     SetTimer () => ToolTip(), -ms
 }
 
