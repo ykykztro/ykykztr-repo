@@ -233,28 +233,8 @@ JumpToWindow(n) {
         }
         FocusPage(s.hwnd)        ; 焦点送回页面（空格可控制视频）
     } else if (app = "VSCode") {
-        name := s.name
-        if !name {
-            ShowTip("Slot " n " 无法解析文件名", 2000)
-            return
-        }
-        if (VSCodeFileName(WinGetTitle("ahk_id " s.hwnd)) = name) {
-            ShowTip("Slot " n ": " name, 1200)
-            return
-        }
-        ; 用 Ctrl+P 快速打开按文件名直达：不依赖标签方向键，不受分屏/多组影响
-        SendInput "^p"
-        Sleep 250
-        SendInput "^a{Delete}"
-        Sleep 60
-        SendInput name
-        Sleep 400
-        SendInput "{Enter}"
-        Sleep 200
-        if (VSCodeFileName(WinGetTitle("ahk_id " s.hwnd)) = name)
-            ShowTip("Slot " n " 已定位: " name, 1500)
-        else
-            ShowTip("Slot " n " 未找到: " name, 2500)
+        ; 只要切换到该 VS Code 窗口即算成功，不在窗口内定位到某个文件标签
+        ShowTip("Slot " n " 已切换至 VS Code", 1200)
     } else {
         ShowTip("Slot " n ": " s.name, 1200)
     }
