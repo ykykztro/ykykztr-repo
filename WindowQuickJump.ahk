@@ -113,20 +113,13 @@ BrowserPageTitle(title) {
     return Trim(t)
 }
 
-; === 把键盘焦点送回网页渲染控件（解决"停在设置和其他"）===
-;  切回标签页后，焦点有时停留在 Edge ⋮ 菜单 / 标签栏 / 地址栏，
-;  导致空格无法控制网页视频。把焦点交给页面渲染控件即可恢复。
-FocusPage(hwnd) {
-    try {
-        ControlFocus("Chrome_RenderWidgetHostHWND1", "ahk_id " hwnd)
-    } catch {
-        try {
-            ControlFocus("Chrome_RenderWidgetHostHWND", "ahk_id " hwnd)
-        } catch {
-            ; 渲染控件不存在（极少见），焦点大概率已在页面，忽略
-        }
-    }
-}
+; === 页面焦点策略（IME 友好）===
+;  早期版本用 ControlFocus("Chrome_RenderWidgetHostHWND1") 强行把焦点
+;  交给整页渲染控件，结果把微软拼音候选框钉在了窗口左上角(0,0)——
+;  因为这控件没有光标，IME 找不到合成/候选位置就回退到原点。
+;  现改为：仅用 WinActivate + 键盘 Ctrl+PageDown 循环切标签，
+;  Chromium 会自然把焦点保留在页面内容（空格仍可控制视频），
+;  同时 IME 候选框也能正常跟随光标。故不再调用 ControlFocus。
 
 ; === 顺序遍历查找（浏览器标签页定位的主要方式）===
 ;  key       : 切换键，如 "^{PgDn}"(正向) / "^{PgUp}"(反向)
@@ -231,7 +224,6 @@ JumpToWindow(n) {
             if !found
                 ShowTip("Slot " n " 未找到: " name, 2500)
         }
-        FocusPage(s.hwnd)        ; 焦点送回页面（空格可控制视频）
     } else if (app = "VSCode") {
         ; 只要切换到该 VS Code 窗口即算成功，不在窗口内定位到某个文件标签
         ShowTip("Slot " n " 已切换至 VS Code", 1200)
