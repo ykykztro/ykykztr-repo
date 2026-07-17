@@ -1,7 +1,7 @@
 ; ============================================================
 ;  WindowQuickJump.ahk — 窗口/标签页编号直达工具
-;  AHK v2       Alt+1~9 绑定/切换    Ctrl+Alt+1~9 强制覆盖
-;  支持：浏览器标签页（Ctrl+Shift+A 标签搜索）/ VS Code 编辑器
+;  AHK v2       左Alt+1~9 绑定/切换    Ctrl+左Alt+1~9 强制覆盖
+;  支持：浏览器标签页（清洗标题 + 循环遍历）/ VS Code 编辑器
 ; ============================================================
 
 #Requires AutoHotkey v2.0
@@ -235,8 +235,8 @@ JumpToWindow(n) {
 ; === 注册快捷键 1~9 ===
 Loop 9 {
     n := A_Index
-    Hotkey "!" n, QuickJump.Bind(n)
-    Hotkey "^!" n, BindWindow.Bind(n)
+    Hotkey "<!" n, QuickJump.Bind(n)
+    Hotkey "^<!" n, BindWindow.Bind(n)
 }
 
 QuickJump(n, *) {
@@ -257,4 +257,4 @@ Cleanup(*) {
 }
 
 ; === 启动提示 ===
-ShowTip("WindowQuickJump 已启动`nAlt+1~9 绑定/切换 | Ctrl+Alt+1~9 强制覆盖", 3000)
+ShowTip("WindowQuickJump 已启动`n左Alt+1~9 绑定/切换 | Ctrl+左Alt+1~9 强制覆盖", 3000)
