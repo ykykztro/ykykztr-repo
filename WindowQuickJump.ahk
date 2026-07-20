@@ -294,43 +294,43 @@ JumpToWindow(n) {
         name := s.name
         if (name = "") {
             ShowTip("Slot " n " 名字为空", 1500)
-        } else {
-            found := false
-            ; ① 若已缓存位置 → Ctrl+数字 瞬跳并校验标题（最常用、最稳、零翻页、不动地址栏）
-            if (s.HasOwnProp("tabIndex") && s.tabIndex >= 1 && s.tabIndex <= 8) {
-                SendInput "^" s.tabIndex
-                if (WaitTitle(s.hwnd, name, 300)) {
-                    ShowTip("Slot " n " 已定位", 1200)
-                    found := true
-                }
-            }
-            ; ② 位置未知 → 按标题顺序定位（最多 8 步即停），成功则缓存位置供下次瞬跳
-            if (!found) {
-                pos := GetTabPosition(name, s.hwnd)
-                if (pos >= 1 && pos <= 8) {
-                    s.tabIndex := pos
-                    ShowTip("Slot " n " 已定位", 1200)
-                    found := true
-                }
-            }
-            ; ③ 终极回退：标题顺序遍历（位置>8 / 漂移）
-            if (!found) {
-                mF(t) {
-                    return InStr(BrowserPageTitle(t), name) == 1
-                }
-                found := CycleTabs(s.hwnd, "^{PgDn}", mF, BrowserPageTitle, n, "Slot " n)
-                if !found
-                    found := CycleTabs(s.hwnd, "^{PgUp}", mF, BrowserPageTitle, n, "Slot " n)
-                ; 顺序查找成功 → 重算并记录位置，避免下次再走顺序查找（如关标签导致位置漂移）
-                if (found) {
-                    pos := GetTabPosition(name, s.hwnd)
-                    if (pos >= 1 && pos <= 8)
-                        s.tabIndex := pos
-                }
-            }
-            if (!found)
-                ShowTip("Slot " n " 未找到: " name, 2500)
+            return
         }
+        found := false
+        ; ① 若已缓存位置 → Ctrl+数字 瞬跳并校验标题（最常用、最稳、零翻页、不动地址栏）
+        if (s.HasOwnProp("tabIndex") && s.tabIndex >= 1 && s.tabIndex <= 8) {
+            SendInput "^" s.tabIndex
+            if (WaitTitle(s.hwnd, name, 300)) {
+                ShowTip("Slot " n " 已定位", 1200)
+                found := true
+            }
+        }
+        ; ② 位置未知 → 按标题顺序定位（最多 8 步即停），成功则缓存位置供下次瞬跳
+        if (!found) {
+            pos := GetTabPosition(name, s.hwnd)
+            if (pos >= 1 && pos <= 8) {
+                s.tabIndex := pos
+                ShowTip("Slot " n " 已定位", 1200)
+                found := true
+            }
+        }
+        ; ③ 终极回退：标题顺序遍历（位置>8 / 漂移）
+        if (!found) {
+            mF(t) {
+                return InStr(BrowserPageTitle(t), name) == 1
+            }
+            found := CycleTabs(s.hwnd, "^{PgDn}", mF, BrowserPageTitle, n, "Slot " n)
+            if !found
+                found := CycleTabs(s.hwnd, "^{PgUp}", mF, BrowserPageTitle, n, "Slot " n)
+            ; 顺序查找成功 → 重算并记录位置，避免下次再走顺序查找（如关标签导致位置漂移）
+            if (found) {
+                pos := GetTabPosition(name, s.hwnd)
+                if (pos >= 1 && pos <= 8)
+                    s.tabIndex := pos
+            }
+        }
+        if (!found)
+            ShowTip("Slot " n " 未找到: " name, 2500)
     } else if (app = "VSCode") {
         ; 只要切换到该 VS Code 窗口即算成功，不在窗口内定位到某个文件标签
         ShowTip("Slot " n " 已切换至 VS Code", 1200)
@@ -374,6 +374,8 @@ WorkerTick() {
         } else if (action = "bind") {
             BindWindow(n)
         }
+    } catch {
+        ; 单个请求执行异常（如目标窗口在跳转途中关闭）→ 吞掉，继续走下面的派工逻辑，避免 worker 卡死
     }
     ; 只要序号变化（任意新按下，无论 action/n 是否相同）就再跑一轮，避免丢弃后按下的请求。
     if (g_reqSeq != mySeq)
